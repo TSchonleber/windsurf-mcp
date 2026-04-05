@@ -2,7 +2,7 @@
   "name": "windsurf-mcp-bridge",
   "displayName": "Windsurf MCP Bridge",
   "description": "Exposes VS Code API over HTTP for Claude Code MCP integration",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "publisher": "radicalize",
   "engines": {
     "vscode": "^1.85.0"

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { execFile } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { dispatchTools } from './tool-dispatch';
+import { findClaudeBinary } from './platform';
 
 // Inline chat — type @claude anywhere in a file, even across multiple lines.
 //
@@ -12,7 +13,7 @@ import { dispatchTools } from './tool-dispatch';
 //   // and also handle the null case
 //
 // Waits 5 seconds after you stop typing before responding.
-// Streams response tokens in real-time — you see each word appear.
+// Streams response tokens in real-time.
 
 const RESPONSE_START = '// 🤖 ';
 const RESPONSE_BLOCK_START = '/* 🤖 claude:';
@@ -34,9 +35,8 @@ export class InlineChat {
   private processing: Set<string> = new Set();
   private debounceTimer: NodeJS.Timeout | null = null;
   private answeredLines: Set<string> = new Set();
-  private conversationHistory: Map<string, Array<{role: string; content: string}>> = new Map(); // per-file conversation threads
   private statusBarItem: vscode.StatusBarItem;
-  private activeDecoration: vscode.TextEditorDecorationType | null = null;
+  private activeDecorations: Map<string, vscode.TextEditorDecorationType> = new Map();
 
   constructor(context: vscode.ExtensionContext) {
     this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
@@ -66,15 +66,11 @@ export class InlineChat {
       if (!match) { i++; continue; }
 
       const triggerKey = `${doc.uri.fsPath}:${i}`;
+      if (this.processing.has(triggerKey) || this.answeredLines.has(triggerKey)) { i++; continue; }
 
-      if (this.processing.has(triggerKey) || this.answeredLines.has(triggerKey)) {
-        i++;
-        continue;
-      }
-
+      // Collect multi-line question
       const questionParts: string[] = [match[1].trim()];
       let endLine = i;
-
       const triggerPrefix = this.getCommentPrefix(lineText);
 
       for (let j = i + 1; j < doc.lineCount; j++) {
@@ -98,6 +94,7 @@ export class InlineChat {
         endLine = j;
       }
 
+      // Skip if already answered
       const lineAfterBlock = endLine + 1;
       if (lineAfterBlock < doc.lineCount) {
         const afterText = doc.lineAt(lineAfterBlock).text.trimStart();
@@ -115,29 +112,24 @@ export class InlineChat {
       const endCtx = Math.min(doc.lineCount, endLine + 20);
       const context = doc.getText(new vscode.Range(startCtx, 0, endCtx, 0));
 
-      // Check if this is a follow-up (there's a 🤖 response above the @claude)
-      let isFollowUp = false;
-      let previousResponse = '';
-      let previousQuestion = '';
+      // Detect follow-ups
+      let followUp: { previousQuestion: string; previousResponse: string } | undefined;
       if (i > 0) {
-        // Walk backwards to find a 🤖 response block
         for (let k = i - 1; k >= 0; k--) {
           const prevLine = doc.lineAt(k).text.trimStart();
           if (prevLine.startsWith(RESPONSE_START.trim()) || prevLine.startsWith(RESPONSE_BLOCK_END)) {
-            // Found a response — keep going back to find the full block + the original question
-            let respLines: string[] = [];
+            const respLines: string[] = [];
             for (let r = k; r >= 0; r--) {
               const rl = doc.lineAt(r).text.trimStart();
               respLines.unshift(doc.lineAt(r).text);
               if (rl.startsWith(RESPONSE_BLOCK_START.trim()) || rl.startsWith(RESPONSE_START.trim())) {
-                // Now find the question above
                 if (r > 0) {
-                  const qLine = doc.lineAt(r - 1).text;
-                  const qMatch = qLine.match(TRIGGER_LINE);
+                  const qMatch = doc.lineAt(r - 1).text.match(TRIGGER_LINE);
                   if (qMatch) {
-                    isFollowUp = true;
-                    previousQuestion = qMatch[1].trim();
-                    previousResponse = respLines.join('\n');
+                    followUp = {
+                      previousQuestion: qMatch[1].trim(),
+                      previousResponse: respLines.join('\n'),
+                    };
                   }
                 }
                 break;
@@ -145,9 +137,9 @@ export class InlineChat {
             }
             break;
           } else if (prevLine === '') {
-            continue; // skip blank lines
+            continue;
           } else {
-            break; // hit something else
+            break;
           }
         }
       }
@@ -155,37 +147,25 @@ export class InlineChat {
       this.processing.add(triggerKey);
       this.statusBarItem.text = '$(loading~spin) @claude thinking...';
 
-      try {
-        // Fire and don't await — allows parallel processing
-        const promise = this.respond({
-          startLine: i,
-          endLine,
-          question,
-          file: doc.uri.fsPath,
-          context,
-        }, isFollowUp ? { previousQuestion, previousResponse } : undefined);
-
-        promise.then(() => {
-          this.answeredLines.add(triggerKey);
-        }).catch((err: any) => {
+      // Fire without awaiting — parallel processing
+      this.respond({ startLine: i, endLine, question, file: doc.uri.fsPath, context }, followUp)
+        .then(() => this.answeredLines.add(triggerKey))
+        .catch((err: any) => {
           console.error('[inline-chat] Error:', err);
-          this.insertFinalResponse(vscode.Uri.file(doc.uri.fsPath), endLine, `Error: ${err.message}`);
-        }).finally(() => {
+          this.insertText(vscode.Uri.file(doc.uri.fsPath), endLine + 1, `${RESPONSE_START}Error: ${err.message}\n`);
+        })
+        .finally(() => {
           this.processing.delete(triggerKey);
           if (this.processing.size === 0) {
             this.statusBarItem.text = '$(comment-discussion) @claude ready';
           }
         });
-      } catch (err: any) {
-        this.processing.delete(triggerKey);
-      }
 
       i = endLine + 1;
     }
   }
 
   private async respond(query: PendingQuery, followUp?: { previousQuestion: string; previousResponse: string }) {
-    // Dispatch tools first — check if the query can be enriched with editor data
     const toolResults = await dispatchTools(query.question, query.file, query.startLine);
     const toolContext = toolResults.length > 0
       ? `\n\nTool results from the editor:\n${toolResults.map(r => `[${r.toolName}]\n${r.summary}`).join('\n\n')}`
@@ -202,7 +182,6 @@ ${query.context}
 \`\`\`
 ${toolContext}
 
-
 ${followUp ? `Previous conversation in this file:
 User: ${followUp.previousQuestion}
 Assistant: ${followUp.previousResponse}
@@ -218,146 +197,168 @@ Rules:
 ${toolResults.length > 0 ? '- Tool results above are REAL data from the editor. Use them in your answer. Be specific.' : ''}`;
 
     const uri = vscode.Uri.file(query.file);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.fsPath === uri.fsPath);
+    const insertLine = query.endLine + 1;
 
     // Insert placeholder
-    const insertLine = query.endLine + 1;
-    const placeholderEdit = new vscode.WorkspaceEdit();
-    placeholderEdit.insert(uri, new vscode.Position(insertLine, 0), `${RESPONSE_START}...\n`);
-    await vscode.workspace.applyEdit(placeholderEdit);
+    await this.insertText(uri, insertLine, `${RESPONSE_START}...\n`);
 
-    // Track accumulated text
-    let accumulated = '';
-    let currentResponseLines = 1;
-
-    // Set up streaming decoration
-    if (this.activeDecoration) this.activeDecoration.dispose();
-    this.activeDecoration = vscode.window.createTextEditorDecorationType({
+    // Set up highlight decoration
+    const decoKey = `${query.file}:${insertLine}`;
+    const decoration = vscode.window.createTextEditorDecorationType({
       backgroundColor: 'rgba(74, 222, 128, 0.08)',
       isWholeLine: true,
       border: '1px solid rgba(74, 222, 128, 0.3)',
       borderWidth: '0 0 0 3px',
     });
+    this.activeDecorations.set(decoKey, decoration);
+
+    const claudePath = findClaudeBinary();
 
     return new Promise<void>((resolve, reject) => {
-      const claudePath = this.findClaude();
-
-      // Simple approach: use claude -p without streaming, get clean output
-      execFile(claudePath, ['-p', prompt, '--no-session-persistence'], {
-        timeout: 60000,
-        maxBuffer: 1024 * 1024,
+      const proc = spawn(claudePath, [
+        '-p', prompt,
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--no-session-persistence',
+      ], {
         env: { ...process.env, NO_COLOR: '1' },
-      }, async (err: any, stdout: string, stderr: string) => {
+      });
+
+      let buffer = '';
+      let accumulated = '';
+      let updateScheduled = false;
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        let changed = false;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'assistant' && event.message?.content) {
+              const textBlocks = event.message.content.filter((b: any) => b.type === 'text');
+              const fullText = textBlocks.map((b: any) => b.text).join('');
+              if (fullText && fullText !== accumulated) {
+                accumulated = fullText;
+                changed = true;
+              }
+            } else if (event.type === 'result' && event.result) {
+              accumulated = event.result;
+              changed = true;
+            }
+          } catch {}
+        }
+
+        // Throttle updates to avoid flicker — max once per 100ms
+        if (changed && !updateScheduled) {
+          updateScheduled = true;
+          setTimeout(() => {
+            updateScheduled = false;
+            this.updateStreamingResponse(uri, insertLine, accumulated, decoration);
+          }, 100);
+        }
+      });
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        console.error('[inline-chat] stderr:', chunk.toString());
+      });
+
+      proc.on('close', async () => {
         try {
-          if (err) {
-            reject(new Error(`claude CLI failed: ${err.message}`));
-            return;
-          }
-          // Strip comment prefixes Claude might add despite instructions
-          accumulated = stdout.trim()
+          // Strip comment prefixes Claude might add
+          const clean = accumulated.trim()
             .split('\n')
             .map(l => l.replace(/^\s*\/\/\s?/, '').replace(/^\s*#\s?/, '').replace(/^\s*--\s?/, ''))
             .join('\n')
             .trim();
-          await this.replaceFinalResponse(uri, insertLine, accumulated);
-          if (this.activeDecoration) {
-            setTimeout(() => {
-              this.activeDecoration?.dispose();
-              this.activeDecoration = null;
-            }, 8000);
-          }
+          await this.writeResponse(uri, insertLine, clean || '(no response)');
+          // Fade decoration
+          setTimeout(() => {
+            decoration.dispose();
+            this.activeDecorations.delete(decoKey);
+          }, 8000);
           resolve();
         } catch (e: any) {
           reject(e);
         }
       });
+
+      proc.on('error', (err) => reject(new Error(`claude CLI failed: ${err.message}`)));
+
+      // Timeout
+      const timer = setTimeout(() => { proc.kill(); reject(new Error('Timeout')); }, 60000);
+      proc.on('close', () => clearTimeout(timer));
     });
   }
 
-  private async updateResponse(uri: vscode.Uri, startLine: number, text: string, editor?: vscode.TextEditor) {
+  private async updateStreamingResponse(uri: vscode.Uri, startLine: number, text: string, decoration: vscode.TextEditorDecorationType) {
     const doc = await vscode.workspace.openTextDocument(uri);
-    const lines = text.split('\n');
-    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
-    if (lines.length === 0) return;
+    // Strip prefixes for display
+    const clean = text.trim()
+      .split('\n')
+      .map(l => l.replace(/^\s*\/\/\s?/, '').replace(/^\s*#\s?/, '').replace(/^\s*--\s?/, ''))
+      .join('\n')
+      .trim();
+    if (!clean) return;
 
-    // Build the streaming display — single line or multi
-    let display: string;
-    if (lines.length <= 2) {
-      display = lines.map(l => `${RESPONSE_START}${l}`).join('\n') + '\n';
-    } else {
-      display = `${RESPONSE_BLOCK_START}\n${lines.map(l => `   ${l}`).join('\n')}\n${RESPONSE_BLOCK_END}\n`;
-    }
+    const display = this.formatResponse(clean);
+    const displayLineCount = display.split('\n').length;
 
-    // Figure out how many lines the current response occupies
-    const currentText = doc.getText();
-    const allLines = currentText.split('\n');
-
-    // Find the response block start
-    let responseEnd = startLine;
-    for (let i = startLine; i < allLines.length; i++) {
-      const trimmed = allLines[i].trimStart();
-      if (trimmed.startsWith(RESPONSE_START.trim()) ||
-          trimmed.startsWith(RESPONSE_BLOCK_START.trim()) ||
-          trimmed.startsWith(RESPONSE_BLOCK_END.trim()) ||
-          trimmed.startsWith('   ')) { // indented content in block
-        responseEnd = i + 1;
-      } else {
-        break;
-      }
-    }
+    // Find current response extent
+    const responseEnd = this.findResponseEnd(doc, startLine);
 
     const edit = new vscode.WorkspaceEdit();
-    const range = new vscode.Range(startLine, 0, responseEnd, 0);
-    edit.replace(uri, range, display);
+    edit.replace(uri, new vscode.Range(startLine, 0, responseEnd, 0), display);
     await vscode.workspace.applyEdit(edit);
 
     // Update decoration
-    if (editor && this.activeDecoration) {
-      const displayLines = display.split('\n').length - 1;
-      const decorRange = new vscode.Range(startLine, 0, startLine + displayLines, 0);
-      editor.setDecorations(this.activeDecoration, [decorRange]);
+    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.fsPath === uri.fsPath);
+    if (editor) {
+      editor.setDecorations(decoration, [new vscode.Range(startLine, 0, startLine + displayLineCount - 1, 0)]);
     }
   }
 
-  private async replaceFinalResponse(uri: vscode.Uri, startLine: number, text: string) {
+  private async writeResponse(uri: vscode.Uri, startLine: number, text: string) {
     const doc = await vscode.workspace.openTextDocument(uri);
+    const display = this.formatResponse(text);
+    const responseEnd = this.findResponseEnd(doc, startLine);
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(uri, new vscode.Range(startLine, 0, responseEnd, 0), display);
+    await vscode.workspace.applyEdit(edit);
+  }
+
+  private formatResponse(text: string): string {
     const lines = text.split('\n');
     while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
     while (lines.length > 0 && lines[0].trim() === '') lines.shift();
-    if (lines.length === 0) lines.push('(no response)');
+    if (lines.length === 0) return `${RESPONSE_START}(no response)\n`;
 
-    let formatted: string;
     if (lines.length <= 2) {
-      formatted = lines.map(l => `${RESPONSE_START}${l}`).join('\n') + '\n';
-    } else {
-      formatted = `${RESPONSE_BLOCK_START}\n${lines.map(l => `   ${l}`).join('\n')}\n${RESPONSE_BLOCK_END}\n`;
+      return lines.map(l => `${RESPONSE_START}${l}`).join('\n') + '\n';
     }
+    return `${RESPONSE_BLOCK_START}\n${lines.map(l => `   ${l}`).join('\n')}\n${RESPONSE_BLOCK_END}\n`;
+  }
 
-    // Find current response extent
-    const allLines = doc.getText().split('\n');
-    let responseEnd = startLine;
-    for (let i = startLine; i < allLines.length; i++) {
-      const trimmed = allLines[i].trimStart();
-      if (trimmed.startsWith(RESPONSE_START.trim()) ||
-          trimmed.startsWith(RESPONSE_BLOCK_START.trim()) ||
-          trimmed.startsWith(RESPONSE_BLOCK_END.trim()) ||
-          trimmed.startsWith('   ')) {
-        responseEnd = i + 1;
+  private findResponseEnd(doc: vscode.TextDocument, startLine: number): number {
+    let end = startLine;
+    for (let i = startLine; i < doc.lineCount; i++) {
+      const t = doc.lineAt(i).text.trimStart();
+      if (t.startsWith(RESPONSE_START.trim()) || t.startsWith(RESPONSE_BLOCK_START.trim()) ||
+          t.startsWith(RESPONSE_BLOCK_END) || t.startsWith('   ')) {
+        end = i + 1;
       } else {
         break;
       }
     }
-
-    const edit = new vscode.WorkspaceEdit();
-    const range = new vscode.Range(startLine, 0, responseEnd, 0);
-    edit.replace(uri, range, formatted);
-    await vscode.workspace.applyEdit(edit);
+    return end;
   }
 
-  private async insertFinalResponse(uri: vscode.Uri, afterLine: number, text: string) {
+  private async insertText(uri: vscode.Uri, line: number, text: string) {
     const edit = new vscode.WorkspaceEdit();
-    edit.insert(uri, new vscode.Position(afterLine + 1, 0), `${RESPONSE_START}${text}\n`);
+    edit.insert(uri, new vscode.Position(line, 0), text);
     await vscode.workspace.applyEdit(edit);
   }
 
@@ -371,26 +372,13 @@ ${toolResults.length > 0 ? '- Tool results above are REAL data from the editor. 
   }
 
   private looksLikeCode(line: string): boolean {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) return true;
-    if (trimmed.startsWith('const ') || trimmed.startsWith('let ') || trimmed.startsWith('var ')) return true;
-    if (trimmed.startsWith('function ') || trimmed.startsWith('class ') || trimmed.startsWith('interface ')) return true;
-    if (trimmed.startsWith('if (') || trimmed.startsWith('for (') || trimmed.startsWith('while (')) return true;
-    if (trimmed.startsWith('return ') || trimmed === '{' || trimmed === '}') return true;
-    if (trimmed.startsWith('def ') || trimmed.startsWith('async ')) return true;
-    return false;
-  }
-
-  private findClaude(): string {
-    const config = vscode.workspace.getConfiguration('windsurf-mcp');
-    const custom = config.get<string>('claudePath', '');
-    if (custom) return custom;
-    return '/Users/r4vager/.local/bin/claude';
+    const t = line.trim();
+    return /^(?:import |export |const |let |var |function |class |interface |if \(|for \(|while \(|return |def |async )/.test(t) || t === '{' || t === '}';
   }
 
   dispose() {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    if (this.activeDecoration) this.activeDecoration.dispose();
+    for (const d of this.activeDecorations.values()) d.dispose();
     for (const d of this.disposables) d.dispose();
     this.statusBarItem.dispose();
   }

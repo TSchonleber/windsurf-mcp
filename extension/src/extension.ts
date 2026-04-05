@@ -5,6 +5,7 @@ import { CompletionProvider } from './completions';
 import { DiffPreview } from './diff-preview';
 import { InlineChat } from './inline-chat';
 import { SmartCompletions } from './smart-completions';
+import { UpdateChecker } from './update-check';
 
 let bridge: BridgeServer | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -54,6 +55,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Smart completions — brainctl-powered tab completions
   const smartCompletions = new SmartCompletions(context);
   context.subscriptions.push({ dispose: () => smartCompletions.dispose() });
+
+  // Auto-update checker
+  const updateChecker = new UpdateChecker(context);
+  context.subscriptions.push({ dispose: () => updateChecker.dispose() });
 
   // Commands
   context.subscriptions.push(
