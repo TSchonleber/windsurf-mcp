@@ -1,0 +1,51 @@
+{
+  "name": "windsurf-mcp-bridge",
+  "displayName": "Windsurf MCP Bridge",
+  "description": "Exposes VS Code API over HTTP for Claude Code MCP integration",
+  "version": "0.1.0",
+  "publisher": "radicalize",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "windsurf-mcp.showStatus",
+        "title": "Windsurf MCP: Show Bridge Status"
+      },
+      {
+        "command": "windsurf-mcp.restart",
+        "title": "Windsurf MCP: Restart Bridge Server"
+      }
+    ],
+    "configuration": {
+      "title": "Windsurf MCP Bridge",
+      "properties": {
+        "windsurf-mcp.port": {
+          "type": "number",
+          "default": 7749,
+          "description": "Port for the HTTP bridge server"
+        },
+        "windsurf-mcp.enableCompletions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Claude-powered tab completions"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npm run compile && npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
