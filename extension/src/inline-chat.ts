@@ -151,11 +151,10 @@ ${query.context}
 Their message: ${query.question}
 
 Rules:
-- You're writing directly into a source file. Be terse.
-- If they ask a question, prefix each line with // 
-- If they ask you to write/fix/add code, output raw code (no comment prefix, no markdown fences)
-- 1-15 lines max unless they explicitly ask for more
-- No markdown. No \`\`\` fences. Raw text only.`;
+- Be terse. 1-15 lines max.
+- Do NOT add comment prefixes (no // or # or --). The system wraps your response automatically.
+- If they ask you to write code, output raw code.
+- No markdown. No \`\`\` fences. No comment syntax. Just the raw answer text.`;
 
     const uri = vscode.Uri.file(query.file);
     const doc = await vscode.workspace.openTextDocument(uri);
@@ -194,7 +193,12 @@ Rules:
             reject(new Error(`claude CLI failed: ${err.message}`));
             return;
           }
-          accumulated = stdout.trim();
+          // Strip comment prefixes Claude might add despite instructions
+          accumulated = stdout.trim()
+            .split('\n')
+            .map(l => l.replace(/^\s*\/\/\s?/, '').replace(/^\s*#\s?/, '').replace(/^\s*--\s?/, ''))
+            .join('\n')
+            .trim();
           await this.replaceFinalResponse(uri, insertLine, accumulated);
           if (this.activeDecoration) {
             setTimeout(() => {
