@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
+import { dispatchTools } from './tool-dispatch';
 
 // Inline chat — type @claude anywhere in a file, even across multiple lines.
 //
@@ -117,7 +118,7 @@ export class InlineChat {
       this.statusBarItem.text = '$(loading~spin) @claude thinking...';
 
       try {
-        await this.respondStreaming({
+        await this.respond({
           startLine: i,
           endLine,
           question,
@@ -137,7 +138,13 @@ export class InlineChat {
     }
   }
 
-  private async respondStreaming(query: PendingQuery) {
+  private async respond(query: PendingQuery) {
+    // Dispatch tools first — check if the query can be enriched with editor data
+    const toolResults = await dispatchTools(query.question, query.file, query.startLine);
+    const toolContext = toolResults.length > 0
+      ? `\n\nTool results from the editor:\n${toolResults.map(r => `[${r.toolName}]\n${r.summary}`).join('\n\n')}`
+      : '';
+
     const prompt = `You are an inline code collaborator. The user typed @claude in their source file to talk to you.
 
 File: ${query.file}
@@ -147,6 +154,7 @@ Code context around their message:
 \`\`\`
 ${query.context}
 \`\`\`
+${toolContext}
 
 Their message: ${query.question}
 
@@ -154,7 +162,8 @@ Rules:
 - Be terse. 1-15 lines max.
 - Do NOT add comment prefixes (no // or # or --). The system wraps your response automatically.
 - If they ask you to write code, output raw code.
-- No markdown. No \`\`\` fences. No comment syntax. Just the raw answer text.`;
+- No markdown. No \`\`\` fences. No comment syntax. Just the raw answer text.
+${toolResults.length > 0 ? '- Tool results above are REAL data from the editor. Use them in your answer. Be specific.' : ''}`;
 
     const uri = vscode.Uri.file(query.file);
     const doc = await vscode.workspace.openTextDocument(uri);
