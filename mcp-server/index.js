@@ -15,7 +15,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import http from "http";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const BRIDGE_PORT = parseInt(process.env.WINDSURF_MCP_PORT ?? "7749", 10);
 const BRIDGE_HOST = "127.0.0.1";
 

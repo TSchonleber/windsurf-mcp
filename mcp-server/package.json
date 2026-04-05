@@ -1,6 +1,6 @@
 {
   "name": "windsurf-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for real-time IDE collaboration between Claude Code and Windsurf/VS Code",
   "type": "module",
   "main": "index.js",
