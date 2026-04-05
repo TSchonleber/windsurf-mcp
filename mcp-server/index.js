@@ -311,6 +311,220 @@ const TOOLS = [
       required: ["path", "line", "character"],
     },
   },
+  {
+    name: "poll_events",
+    description:
+      "Poll editor events — file opens/closes, cursor moves, selections, saves, diagnostic changes, scrolling. Use 'since' timestamp for incremental polling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: { type: "number", description: "Unix ms timestamp — only return events after this time" },
+        limit: { type: "number", description: "Max events to return (default: 50)" },
+      },
+    },
+  },
+  {
+    name: "search_text",
+    description:
+      "Search for text across all files in the workspace. Like grep but uses the editor's file index.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Text to search for" },
+        include: { type: "string", description: "Glob pattern for files to include (default: **/*)" },
+        exclude: { type: "string", description: "Glob pattern for files to exclude (default: **/node_modules/**)" },
+        maxResults: { type: "number", description: "Max results (default: 50)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "search_symbols",
+    description:
+      "Search for symbols (functions, classes, variables) across the entire workspace by name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Symbol name to search for" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_code_actions",
+    description:
+      "Get available code actions (quick fixes, refactors) at a position or range. Shows what the language server can auto-fix.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path" },
+        startLine: { type: "number", description: "Start line" },
+        startChar: { type: "number" },
+        endLine: { type: "number" },
+        endChar: { type: "number" },
+      },
+      required: ["path", "startLine"],
+    },
+  },
+  {
+    name: "apply_code_action",
+    description:
+      "Apply a specific code action by title. First use get_code_actions to see what's available, then apply by title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path" },
+        startLine: { type: "number" },
+        startChar: { type: "number" },
+        endLine: { type: "number" },
+        endChar: { type: "number" },
+        title: { type: "string", description: "Exact title of the code action to apply" },
+      },
+      required: ["path", "startLine", "title"],
+    },
+  },
+  {
+    name: "set_decorations",
+    description:
+      "Add inline annotations/decorations to code. Shows text after/before lines, highlights, hover messages. Use for code review comments, type hints, etc.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Unique ID for this decoration set (use to update/clear later)" },
+        path: { type: "string", description: "File path" },
+        decorations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              startLine: { type: "number" },
+              startChar: { type: "number" },
+              endLine: { type: "number" },
+              endChar: { type: "number" },
+              after: { type: "string", description: "Text to show after the line" },
+              before: { type: "string", description: "Text to show before" },
+              color: { type: "string", description: "Text color (CSS)" },
+              backgroundColor: { type: "string", description: "Background color (CSS)" },
+              hoverMessage: { type: "string", description: "Markdown shown on hover" },
+            },
+            required: ["startLine"],
+          },
+        },
+      },
+      required: ["id", "path", "decorations"],
+    },
+  },
+  {
+    name: "clear_decorations",
+    description: "Remove decorations by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Decoration set ID to clear" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "create_file",
+    description: "Create a new file with content and open it in the editor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Absolute file path" },
+        content: { type: "string", description: "File content (default: empty)" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "delete_file",
+    description: "Delete a file from the workspace.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Absolute file path" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "rename_file",
+    description: "Rename/move a file. Updates imports if the language server supports it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        oldPath: { type: "string", description: "Current file path" },
+        newPath: { type: "string", description: "New file path" },
+      },
+      required: ["oldPath", "newPath"],
+    },
+  },
+  {
+    name: "batch_edit",
+    description:
+      "Apply edits across multiple files in a single atomic operation. Each file can have multiple find/replace or range edits.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              edits: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    find: { type: "string" },
+                    replace: { type: "string" },
+                    all: { type: "boolean" },
+                    startLine: { type: "number" },
+                    startChar: { type: "number" },
+                    endLine: { type: "number" },
+                    endChar: { type: "number" },
+                    text: { type: "string" },
+                  },
+                },
+              },
+            },
+            required: ["path", "edits"],
+          },
+        },
+      },
+      required: ["operations"],
+    },
+  },
+  {
+    name: "set_selection",
+    description: "Set the cursor position or selection in the editor. Scrolls to reveal.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path (optional, uses active editor)" },
+        startLine: { type: "number" },
+        startChar: { type: "number" },
+        endLine: { type: "number" },
+        endChar: { type: "number" },
+      },
+      required: ["startLine"],
+    },
+  },
+  {
+    name: "fold_code",
+    description: "Fold or unfold code regions at specified lines.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path" },
+        lines: { type: "array", items: { type: "number" }, description: "Line numbers to fold" },
+        unfold: { type: "boolean", description: "Unfold instead of fold (default: false)" },
+      },
+      required: ["path", "lines"],
+    },
+  },
 ];
 
 // --- Route mapping: tool name → HTTP method + path ---
@@ -335,6 +549,19 @@ const TOOL_ROUTES = {
   diff_apply: ["POST", "/api/diff/apply"],
   notify: ["POST", "/api/notify"],
   hover_info: ["POST", "/api/hover"],
+  poll_events: (args) => args.since ? ["POST", "/api/events"] : ["GET", "/api/events"],
+  search_text: ["POST", "/api/search/text"],
+  search_symbols: ["POST", "/api/search/symbols"],
+  get_code_actions: ["POST", "/api/codeactions"],
+  apply_code_action: ["POST", "/api/codeactions/apply"],
+  set_decorations: ["POST", "/api/decorations/set"],
+  clear_decorations: ["POST", "/api/decorations/clear"],
+  create_file: ["POST", "/api/files/create"],
+  delete_file: ["POST", "/api/files/delete"],
+  rename_file: ["POST", "/api/files/rename"],
+  batch_edit: ["POST", "/api/batch/edit"],
+  set_selection: ["POST", "/api/selection/set"],
+  fold_code: ["POST", "/api/fold"],
 };
 
 // --- MCP Server ---
