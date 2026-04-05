@@ -15,6 +15,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import http from "http";
 
+const VERSION = "0.2.0";
 const BRIDGE_PORT = parseInt(process.env.WINDSURF_MCP_PORT ?? "7749", 10);
 const BRIDGE_HOST = "127.0.0.1";
 
@@ -607,6 +608,37 @@ async function main() {
   if (process.argv.includes("--list-tools")) {
     for (const t of TOOLS) {
       console.log(`  ${t.name}: ${t.description.slice(0, 80)}`);
+    }
+    return;
+  }
+
+  // Version
+  if (process.argv.includes("--version")) {
+    console.log(`windsurf-mcp v${VERSION}`);
+    return;
+  }
+
+  // Update check
+  if (process.argv.includes("--update-check")) {
+    try {
+      const latest = await new Promise((resolve, reject) => {
+        http.get("http://registry.npmjs.org/windsurf-mcp/latest", (res) => {
+          let data = "";
+          res.on("data", (c) => data += c);
+          res.on("end", () => {
+            try { resolve(JSON.parse(data).version); }
+            catch { resolve(null); }
+          });
+        }).on("error", () => resolve(null));
+      });
+      if (latest && latest !== VERSION) {
+        console.log(`Update available: v${VERSION} → v${latest}`);
+        console.log("Run: npm update -g windsurf-mcp");
+      } else {
+        console.log(`windsurf-mcp v${VERSION} — up to date`);
+      }
+    } catch {
+      console.log(`windsurf-mcp v${VERSION}`);
     }
     return;
   }
