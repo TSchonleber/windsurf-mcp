@@ -3,6 +3,7 @@ import * as http from 'http';
 import { BridgeServer } from './bridge';
 import { CompletionProvider } from './completions';
 import { DiffPreview } from './diff-preview';
+import { InlineChat } from './inline-chat';
 
 let bridge: BridgeServer | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -44,6 +45,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Diff preview
   const diffPreview = new DiffPreview();
   bridge.setDiffPreview(diffPreview);
+
+  // Inline chat — @claude in any file
+  const inlineChat = new InlineChat(context);
+  context.subscriptions.push({ dispose: () => inlineChat.dispose() });
 
   // Commands
   context.subscriptions.push(

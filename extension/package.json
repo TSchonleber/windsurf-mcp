@@ -33,6 +33,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable Claude-powered tab completions"
+        },
+        "windsurf-mcp.claudePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to claude CLI binary (auto-detected if empty)"
         }
       }
     }
