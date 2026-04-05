@@ -186,6 +186,7 @@ Rules:
       const proc = spawn(claudePath, [
         '-p', prompt,
         '--output-format', 'stream-json',
+        '--verbose',
         '--no-session-persistence',
       ], {
         env: { ...process.env, NO_COLOR: '1' },
@@ -203,14 +204,18 @@ Rules:
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            if (event.type === 'assistant' && event.subtype === 'text') {
-              // Streaming text delta
-              accumulated += event.text ?? '';
-              this.updateResponse(uri, insertLine, accumulated, editor);
-            } else if (event.type === 'result') {
+            if (event.type === 'assistant' && event.message?.content) {
+              // Full or partial assistant message
+              const textBlocks = event.message.content.filter((b: any) => b.type === 'text');
+              const fullText = textBlocks.map((b: any) => b.text).join('');
+              if (fullText && fullText !== accumulated) {
+                accumulated = fullText;
+                this.updateResponse(uri, insertLine, accumulated, editor);
+              }
+            } else if (event.type === 'result' && event.result) {
               // Final result
-              const finalText = event.result ?? accumulated;
-              accumulated = finalText;
+              accumulated = event.result;
+              this.updateResponse(uri, insertLine, accumulated, editor);
             }
           } catch {
             // Not JSON or partial — skip
