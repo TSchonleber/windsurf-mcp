@@ -4,6 +4,7 @@ import { BridgeServer } from './bridge';
 import { CompletionProvider } from './completions';
 import { DiffPreview } from './diff-preview';
 import { InlineChat } from './inline-chat';
+import { SmartCompletions } from './smart-completions';
 
 let bridge: BridgeServer | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -49,6 +50,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Inline chat — @claude in any file
   const inlineChat = new InlineChat(context);
   context.subscriptions.push({ dispose: () => inlineChat.dispose() });
+
+  // Smart completions — brainctl-powered tab completions
+  const smartCompletions = new SmartCompletions(context);
+  context.subscriptions.push({ dispose: () => smartCompletions.dispose() });
 
   // Commands
   context.subscriptions.push(
