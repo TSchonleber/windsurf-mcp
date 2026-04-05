@@ -644,6 +644,12 @@ export class BridgeServer {
       return { success: true, action: unfold ? 'unfold' : 'fold', lines };
     });
 
+    // --- Shutdown (for EADDRINUSE recovery) ---
+    this.routes.set('POST /api/shutdown', async () => {
+      setTimeout(() => this.stop(), 100);
+      return { status: 'shutting_down' };
+    });
+
     // --- Health ---
     this.routes.set('GET /api/health', async () => {
       return {
@@ -704,14 +710,48 @@ export class BridgeServer {
         }
       });
 
+      this.server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          console.log(`[windsurf-mcp] Port ${this.port} in use, sending shutdown to old instance...`);
+          // Ask the old instance to die via its own health endpoint
+          const killReq = http.request({ hostname: '127.0.0.1', port: this.port, path: '/api/shutdown', method: 'POST', timeout: 2000 }, () => {
+            // Retry after old instance shuts down
+            setTimeout(() => {
+              this.server = http.createServer(this.server!.listeners('request')[0] as any);
+              this.server!.listen(this.port, '127.0.0.1', () => {
+                this.stats.connected = true;
+                resolve();
+              });
+              this.server!.on('error', (retryErr) => {
+                this.stats.connected = false;
+                reject(retryErr);
+              });
+            }, 500);
+          });
+          killReq.on('error', () => {
+            // Old instance didn't respond, just retry after delay
+            setTimeout(() => {
+              this.server = http.createServer(this.server!.listeners('request')[0] as any);
+              this.server!.listen(this.port, '127.0.0.1', () => {
+                this.stats.connected = true;
+                resolve();
+              });
+              this.server!.on('error', (retryErr) => {
+                this.stats.connected = false;
+                reject(retryErr);
+              });
+            }, 1500);
+          });
+          killReq.end();
+        } else {
+          this.stats.connected = false;
+          reject(err);
+        }
+      });
+
       this.server.listen(this.port, '127.0.0.1', () => {
         this.stats.connected = true;
         resolve();
-      });
-
-      this.server.on('error', (err) => {
-        this.stats.connected = false;
-        reject(err);
       });
     });
   }
