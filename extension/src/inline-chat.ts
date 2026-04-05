@@ -34,6 +34,7 @@ export class InlineChat {
   private processing: Set<string> = new Set();
   private debounceTimer: NodeJS.Timeout | null = null;
   private answeredLines: Set<string> = new Set();
+  private conversationHistory: Map<string, Array<{role: string; content: string}>> = new Map(); // per-file conversation threads
   private statusBarItem: vscode.StatusBarItem;
   private activeDecoration: vscode.TextEditorDecorationType | null = null;
 
@@ -114,31 +115,76 @@ export class InlineChat {
       const endCtx = Math.min(doc.lineCount, endLine + 20);
       const context = doc.getText(new vscode.Range(startCtx, 0, endCtx, 0));
 
+      // Check if this is a follow-up (there's a 🤖 response above the @claude)
+      let isFollowUp = false;
+      let previousResponse = '';
+      let previousQuestion = '';
+      if (i > 0) {
+        // Walk backwards to find a 🤖 response block
+        for (let k = i - 1; k >= 0; k--) {
+          const prevLine = doc.lineAt(k).text.trimStart();
+          if (prevLine.startsWith(RESPONSE_START.trim()) || prevLine.startsWith(RESPONSE_BLOCK_END)) {
+            // Found a response — keep going back to find the full block + the original question
+            let respLines: string[] = [];
+            for (let r = k; r >= 0; r--) {
+              const rl = doc.lineAt(r).text.trimStart();
+              respLines.unshift(doc.lineAt(r).text);
+              if (rl.startsWith(RESPONSE_BLOCK_START.trim()) || rl.startsWith(RESPONSE_START.trim())) {
+                // Now find the question above
+                if (r > 0) {
+                  const qLine = doc.lineAt(r - 1).text;
+                  const qMatch = qLine.match(TRIGGER_LINE);
+                  if (qMatch) {
+                    isFollowUp = true;
+                    previousQuestion = qMatch[1].trim();
+                    previousResponse = respLines.join('\n');
+                  }
+                }
+                break;
+              }
+            }
+            break;
+          } else if (prevLine === '') {
+            continue; // skip blank lines
+          } else {
+            break; // hit something else
+          }
+        }
+      }
+
       this.processing.add(triggerKey);
       this.statusBarItem.text = '$(loading~spin) @claude thinking...';
 
       try {
-        await this.respond({
+        // Fire and don't await — allows parallel processing
+        const promise = this.respond({
           startLine: i,
           endLine,
           question,
           file: doc.uri.fsPath,
           context,
+        }, isFollowUp ? { previousQuestion, previousResponse } : undefined);
+
+        promise.then(() => {
+          this.answeredLines.add(triggerKey);
+        }).catch((err: any) => {
+          console.error('[inline-chat] Error:', err);
+          this.insertFinalResponse(vscode.Uri.file(doc.uri.fsPath), endLine, `Error: ${err.message}`);
+        }).finally(() => {
+          this.processing.delete(triggerKey);
+          if (this.processing.size === 0) {
+            this.statusBarItem.text = '$(comment-discussion) @claude ready';
+          }
         });
-        this.answeredLines.add(triggerKey);
       } catch (err: any) {
-        console.error('[inline-chat] Error:', err);
-        await this.insertFinalResponse(vscode.Uri.file(doc.uri.fsPath), endLine, `Error: ${err.message}`);
-      } finally {
         this.processing.delete(triggerKey);
-        this.statusBarItem.text = '$(comment-discussion) @claude ready';
       }
 
       i = endLine + 1;
     }
   }
 
-  private async respond(query: PendingQuery) {
+  private async respond(query: PendingQuery, followUp?: { previousQuestion: string; previousResponse: string }) {
     // Dispatch tools first — check if the query can be enriched with editor data
     const toolResults = await dispatchTools(query.question, query.file, query.startLine);
     const toolContext = toolResults.length > 0
@@ -156,7 +202,13 @@ ${query.context}
 \`\`\`
 ${toolContext}
 
-Their message: ${query.question}
+
+${followUp ? `Previous conversation in this file:
+User: ${followUp.previousQuestion}
+Assistant: ${followUp.previousResponse}
+
+This is a FOLLOW-UP. The user is continuing the conversation.
+` : ''}Their message: ${query.question}
 
 Rules:
 - Be terse. 1-15 lines max.
