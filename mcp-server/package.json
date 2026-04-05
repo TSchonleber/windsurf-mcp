@@ -1,12 +1,32 @@
 {
-  "name": "windsurf-mcp-server",
-  "version": "0.1.0",
-  "description": "MCP server bridging Claude Code to Windsurf IDE",
+  "name": "windsurf-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for real-time IDE collaboration between Claude Code and Windsurf/VS Code",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "windsurf-mcp": "index.js"
+  },
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "windsurf",
+    "vscode",
+    "ide",
+    "collaboration",
+    "model-context-protocol"
+  ],
+  "author": "Terrence Schonleber <tvschonleber@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TSchonleber/windsurf-mcp"
+  },
+  "homepage": "https://github.com/TSchonleber/windsurf-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
   }
