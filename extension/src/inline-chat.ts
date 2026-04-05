@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { spawn } from 'child_process';
+import { execFile } from 'child_process';
 
 // Inline chat — type @claude anywhere in a file, even across multiple lines.
 //
@@ -183,55 +183,19 @@ Rules:
     return new Promise<void>((resolve, reject) => {
       const claudePath = this.findClaude();
 
-      const proc = spawn(claudePath, [
-        '-p', prompt,
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--no-session-persistence',
-      ], {
-        env: { ...process.env, NO_COLOR: '1' },
+      // Simple approach: use claude -p without streaming, get clean output
+      execFile(claudePath, ['-p', prompt, '--no-session-persistence'], {
         timeout: 60000,
-      });
-
-      let buffer = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? ''; // keep incomplete line
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line);
-            if (event.type === 'assistant' && event.message?.content) {
-              // Full or partial assistant message
-              const textBlocks = event.message.content.filter((b: any) => b.type === 'text');
-              const fullText = textBlocks.map((b: any) => b.text).join('');
-              if (fullText && fullText !== accumulated) {
-                accumulated = fullText;
-                this.updateResponse(uri, insertLine, accumulated, editor);
-              }
-            } else if (event.type === 'result' && event.result) {
-              // Final result
-              accumulated = event.result;
-              this.updateResponse(uri, insertLine, accumulated, editor);
-            }
-          } catch {
-            // Not JSON or partial — skip
-          }
-        }
-      });
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        console.error('[inline-chat] stderr:', chunk.toString());
-      });
-
-      proc.on('close', async (code) => {
-        // Replace with final formatted response
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, NO_COLOR: '1' },
+      }, async (err: any, stdout: string, stderr: string) => {
         try {
+          if (err) {
+            reject(new Error(`claude CLI failed: ${err.message}`));
+            return;
+          }
+          accumulated = stdout.trim();
           await this.replaceFinalResponse(uri, insertLine, accumulated);
-          // Fade decoration
           if (this.activeDecoration) {
             setTimeout(() => {
               this.activeDecoration?.dispose();
@@ -239,19 +203,10 @@ Rules:
             }, 8000);
           }
           resolve();
-        } catch (err: any) {
-          reject(err);
+        } catch (e: any) {
+          reject(e);
         }
       });
-
-      proc.on('error', (err) => {
-        reject(new Error(`claude CLI failed: ${err.message}`));
-      });
-
-      setTimeout(() => {
-        proc.kill();
-        reject(new Error('Timeout — claude took too long'));
-      }, 60000);
     });
   }
 
